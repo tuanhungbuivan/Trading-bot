@@ -1,27 +1,234 @@
-//+------------------------------------------------------------------+\
-//| Function to create rectangle                                     |\
-//+------------------------------------------------------------------+\
-void CreateRec(string name, datetime t1, double p1, datetime t2, double p2, color clr) \{\
-   if (ObjectFind(0, name) >= 0)\
-      ObjectDelete(0, name);\
-\
-   if (ObjectCreate(0, name, OBJ_RECTANGLE, 0, t1, p1, t2, p2)) \{\
-      ObjectSetInteger(0, name, OBJPROP_COLOR, clr);\
-      ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_SOLID);\
-      ObjectSetInteger(0, name, OBJPROP_WIDTH, 2);\
-      ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, true);\
-      ObjectSetInteger(0, name, OBJPROP_BACK, true);\
-   \}\
-\}\
-\
-//+------------------------------------------------------------------+\
-//| Function to update rectangle                                     |\
-//+------------------------------------------------------------------+\
-void UpdateRec(string name, datetime t1, double p1, datetime t2, double p2) \{\
-   if (ObjectFind(0, name) >= 0) \{\
-      ObjectSetInteger(0, name, OBJPROP_TIME, 0, t1);\
-      ObjectSetDouble(0, name, OBJPROP_PRICE, 0, p1);\
-      ObjectSetInteger(0, name, OBJPROP_TIME, 1, t2);\
-      ObjectSetDouble(0, name, OBJPROP_PRICE, 1, p2);\
-   \}\
-\}}
+#include <Trade/Trade.mqh>
+CTrade obj_Trade;
+
+#define FVG_Prefix "FVG REC "
+#define CLR_UP clrLime
+#define CLR_DOWN clrRed
+
+int minPts = 100;
+int FVG_Rec_Ext_Bars = 10;
+
+string totalFVGs[];
+
+int barINDICES[];
+
+datetime barTIMEs[];
+
+bool signalFVGs[];
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit() {
+   int visibleBars = (int)ChartGetInteger(0,CHART_VISIBLE_BARS);
+   Print("Total visible bars on chart = ",visibleBars);
+   
+   if (ObjectsTotal(0,0,OBJ_RECTANGLE)==0){
+      Print("No FVGs Found, Resizing storage arrays to 0 now!!!");
+      ArrayResize(totalFVGs,0);
+      ArrayResize(barINDICES,0);
+      ArrayResize(signalFVGs,0);
+   }
+
+   ObjectsDeleteAll(0,FVG_Prefix);
+
+   for (int i=0; i<=visibleBars; i++){
+      double low0 = iLow(_Symbol,_Period,i);
+      double high2 = iHigh(_Symbol,_Period,i+2);
+      double gap_L0_H2 = NormalizeDouble((low0 - high2)/_Point,_Digits);
+    
+      double high0 = iHigh(_Symbol,_Period,i);
+      double low2 = iLow(_Symbol,_Period,i+2);
+      double gap_H0_L2 = NormalizeDouble((low2 - high0)/_Point,_Digits);
+    
+      bool FVG_UP = low0 > high2 && gap_L0_H2 > minPts;
+      bool FVG_DOWN = low2 > high0 && gap_H0_L2 > minPts;
+      
+      if (FVG_UP || FVG_DOWN){
+         Print("Bar Index with FVG = ",i+1);
+         datetime time1 = iTime(_Symbol,_Period,i+1);
+         double price1 = FVG_UP ? high2 : high0;
+         datetime time2 = time1 + PeriodSeconds(_Period)*FVG_Rec_Ext_Bars;
+         double price2 = FVG_UP ? low0 : low2;
+         string fvgNAME = FVG_Prefix+"("+TimeToString(time1)+")";
+         color fvgClr = FVG_UP ? CLR_UP : CLR_DOWN;
+         CreateRec(fvgNAME,time1,price1,time2,price2,fvgClr);
+         Print("Old ArraySize = ",ArraySize(totalFVGs));
+         ArrayResize(totalFVGs,ArraySize(totalFVGs)+1);
+         ArrayResize(barINDICES,ArraySize(barINDICES)+1);
+         Print("New ArraySize = ",ArraySize(totalFVGs));
+         totalFVGs[ArraySize(totalFVGs)-1] = fvgNAME;
+         barINDICES[ArraySize(barINDICES)-1] = i+1;
+         ArrayPrint(totalFVGs);
+         ArrayPrint(barINDICES);
+      }
+   }
+
+   for (int i=ArraySize(totalFVGs)-1; i>=0; i--){
+      string objName = totalFVGs[i];
+      string fvgNAME = ObjectGetString(0,objName,OBJPROP_NAME);
+      int barIndex = barINDICES[i];
+      datetime timeSTART = (datetime)ObjectGetInteger(0,fvgNAME,OBJPROP_TIME,0);
+      datetime timeEND = (datetime)ObjectGetInteger(0,fvgNAME,OBJPROP_TIME,1);
+      double fvgLOW = ObjectGetDouble(0,fvgNAME,OBJPROP_PRICE,0);
+      double fvgHIGH = ObjectGetDouble(0,fvgNAME,OBJPROP_PRICE,1);
+      color fvgColor = (color)ObjectGetInteger(0,fvgNAME,OBJPROP_COLOR);
+
+      Print("FVG NAME = ",fvgNAME," >No: ",barIndex," TS: ",timeSTART," TE: ",
+            timeEND," LOW: ",fvgLOW," HIGH: ",fvgHIGH," CLR = ",fvgColor);
+            
+      for (int k=barIndex-1; k>=(barIndex-FVG_Rec_Ext_Bars); k--){
+         datetime barTime = iTime(_Symbol,_Period,k);
+         double barLow = iLow(_Symbol,_Period,k);
+         double barHigh = iHigh(_Symbol,_Period,k);
+         
+         if (k==0){
+            Print("OverFlow Detected @ fvg ",fvgNAME);
+            UpdateRec(fvgNAME,timeSTART,fvgLOW,barTime,fvgHIGH);
+            break;
+         }
+       
+         if ((fvgColor == CLR_DOWN && barHigh > fvgHIGH) ||
+            (fvgColor == CLR_UP && barLow < fvgLOW)
+         ){
+            Print("Cut Off @ bar no: ",k," of Time: ",barTime);
+            UpdateRec(fvgNAME,timeSTART,fvgLOW,barTime,fvgHIGH);
+            break;
+         }
+      }
+   }
+
+   ArrayResize(totalFVGs,0);
+   ArrayResize(barINDICES,0);
+   return (INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+void OnTick() {
+   double takeProfit = 1000 * _Point; 
+   double stopLoss = 5000 * _Point;  
+   
+   int maPeriod = 50; // Period for Moving Average
+   double maValue[];
+   ArrayResize(maValue, 1);
+   
+   if (!CopyBuffer(iMA(_Symbol, _Period, maPeriod, 0, MODE_SMA, PRICE_CLOSE), 0, 0, 1, maValue)) {
+      Print("Failed to copy MA buffer! Error code: ", GetLastError());
+      return; // Exit OnTick function if copy buffer fails
+   }
+   
+   double maPriceLevel = maValue[0];
+
+   for (int i=0; i<=FVG_Rec_Ext_Bars; i++){
+      double low0 = iLow(_Symbol,_Period,i+1);
+      double high2 = iHigh(_Symbol,_Period,i+2+1);
+      double gap_L0_H2 = NormalizeDouble((low0 - high2)/_Point,_Digits);
+      
+      double high0 = iHigh(_Symbol,_Period,i+1);
+      double low2 = iLow(_Symbol,_Period,i+2+1);
+      double gap_H0_L2 = NormalizeDouble((low2 - high0)/_Point,_Digits);
+      
+      bool FVG_UP = low0 > high2 && gap_L0_H2 > minPts;
+      bool FVG_DOWN = low2 > high0 && gap_H0_L2 > minPts;
+     
+      if (FVG_UP || FVG_DOWN){
+         datetime time1 = iTime(_Symbol,_Period,i+1+1);
+         double price1 = FVG_UP ? high2 : high0;
+         datetime time2 = time1 + PeriodSeconds(_Period)*FVG_Rec_Ext_Bars;
+         double price2 = FVG_UP ? low0 : low2;
+         string fvgNAME = FVG_Prefix+"("+TimeToString(time1)+")";
+         color fvgClr = FVG_UP ? CLR_UP : CLR_DOWN;
+        
+         if (ObjectFind(0,fvgNAME) < 0){
+            CreateRec(fvgNAME,time1,price1,time2,price2,fvgClr);
+            Print("Old ArraySize = ",ArraySize(totalFVGs));
+            ArrayResize(totalFVGs,ArraySize(totalFVGs)+1);
+            ArrayResize(barTIMEs,ArraySize(barTIMEs)+1);
+            ArrayResize(signalFVGs,ArraySize(signalFVGs)+1);
+            Print("New ArraySize = ",ArraySize(totalFVGs));
+            totalFVGs[ArraySize(totalFVGs)-1] = fvgNAME;
+            barTIMEs[ArraySize(barTIMEs)-1] = time1;
+            signalFVGs[ArraySize(signalFVGs)-1] = false;
+            ArrayPrint(totalFVGs);
+            ArrayPrint(barTIMEs);
+            ArrayPrint(signalFVGs);
+         }
+      }
+   }
+
+   for (int j = ArraySize(totalFVGs) - 1; j >= 0; j--) {
+      bool fvgExist = false;
+      string objName = totalFVGs[j];
+      string fvgNAME = ObjectGetString(0, objName, OBJPROP_NAME);
+      double fvgLow = ObjectGetDouble(0, fvgNAME, OBJPROP_PRICE, 0);
+      double fvgHigh = ObjectGetDouble(0, fvgNAME, OBJPROP_PRICE, 1);
+      color fvgColor = (color)ObjectGetInteger(0, fvgNAME, OBJPROP_COLOR);
+      
+      for (int k=1; k<=FVG_Rec_Ext_Bars; k++){
+         double barLow = iLow(_Symbol,_Period,k);
+         double barHigh = iHigh(_Symbol,_Period,k);
+       
+         if (barHigh == fvgLow || barLow == fvgLow){
+            fvgExist = true;
+            break;
+         }
+      }
+
+       
+      double Ask = NormalizeDouble(SymbolInfoDouble(_Symbol, SYMBOL_ASK), _Digits);
+      double Bid = NormalizeDouble(SymbolInfoDouble(_Symbol, SYMBOL_BID), _Digits);
+
+      Print("FVG: ", fvgNAME, " Color: ", fvgColor, " Ask: ", Ask, " Bid: ", Bid, " MA: ", maPriceLevel);
+   
+      if (fvgColor == CLR_UP && (Ask < fvgLow || Ask < fvgHigh) &&  !signalFVGs[j] && Ask > maPriceLevel) {
+         double tp = Ask + takeProfit;
+         double sl = Ask - stopLoss;
+         int ticket1 = obj_Trade.Buy(5, _Symbol, Ask, sl, tp);
+         if (ticket1 > 0) {
+            Print("Buy Executed for ", fvgNAME);
+            signalFVGs[j] = true;
+         }
+      } 
+      
+     
+      if (fvgColor == CLR_DOWN && (Bid > fvgHigh || Bid > fvgLow) && !signalFVGs[j] && Bid < maPriceLevel) {
+         double tp = Bid - takeProfit;
+         double sl = Bid + stopLoss;
+         int ticket1 = obj_Trade.Sell(5, _Symbol, Bid, sl, tp);
+         if (ticket1 > 0) {
+            Print("Sell Executed for ", fvgNAME);
+            signalFVGs[j] = true;
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Function to create rectangle                                     |
+//+------------------------------------------------------------------+
+void CreateRec(string name, datetime t1, double p1, datetime t2, double p2, color clr) {
+   if (ObjectFind(0, name) >= 0)
+      ObjectDelete(0, name);
+
+   if (ObjectCreate(0, name, OBJ_RECTANGLE, 0, t1, p1, t2, p2)) {
+      ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+      ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_SOLID);
+      ObjectSetInteger(0, name, OBJPROP_WIDTH, 2);
+      ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, true);
+      ObjectSetInteger(0, name, OBJPROP_BACK, true);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Function to update rectangle                                     |
+//+------------------------------------------------------------------+
+void UpdateRec(string name, datetime t1, double p1, datetime t2, double p2) {
+   if (ObjectFind(0, name) >= 0) {
+      ObjectSetInteger(0, name, OBJPROP_TIME, 0, t1);
+      ObjectSetDouble(0, name, OBJPROP_PRICE, 0, p1);
+      ObjectSetInteger(0, name, OBJPROP_TIME, 1, t2);
+      ObjectSetDouble(0, name, OBJPROP_PRICE, 1, p2);
+   }
+}
